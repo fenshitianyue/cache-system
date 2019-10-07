@@ -137,5 +137,97 @@ func (c *Cache) Delete(k string) {
   c.mu.Unlock()
 }
 
+// 将数据项写入 io.Writer 中
+func (c *Cache) Save(w io.Writer) (err error) {
+  enc := gob.NewEncoder(w)
+  defer func() {
+    if x := recover(); x != nil {
+      err = fmt.Errorf("Error registering item types with Gob library!")
+    }
+  }()
+  c.mu.RLock()
+  defer c.mu.RUnlock()
+  for _, v := range c.items {
+    gob.Register(v.Object)
+  }
+  err = enc.Encode(&c.items)
+  //return
+  return err
+}
 
+//从 io.Reader 中读取数据项
+func (c *Cache) Load(r io.Reader) error {
+  dec := gob.NewDecoder()
+  items := map[string]Item{}
+  err := dec.Decode(&items)
+  if err == nil {
+    c.mu.Lock()
+    defer c.mu.Unlock()
+    for k, v := range items {
+      ov, found := c.items[k]
+      if !found || ov.Expired() {
+        c.items[k] = v
+      }
+    }
+  }
+  return v
+}
+
+//保存数据项到文件
+func (c *Cache) SaveToFile(file string) error {
+  f, err = os.Create(file)
+  if err != nil {
+    return err
+  }
+  if err = c.Save(f); err != nil {
+    f.Close()
+    return err
+  }
+  return f.Close()
+}
+
+//从文件中加载缓存数据项
+func (c *Cache) LoadFile(file string) error {
+  f, err := os.Open(file)
+  if err != nil {
+    return err
+  }
+  if err = c.Load(f); err != nil {
+    f.Close()
+    return err
+  }
+  return f.Close()
+}
+
+//返回缓存数据项的数量
+func (c *Cache) Count() int {
+  c.mu.RLock()
+  defer c.mu.RUnLock()
+  return len(c.items)
+}
+
+//清空缓存
+func (c *Cache) Flush() {
+  c.mu.Lock()
+  defer c.mu.UnLock()
+  c.items = map[string]Item{}
+}
+
+//停止过期缓存清理
+func (c *Cache) StopGc() {
+  c.StopGc <- true
+}
+
+//创建一个缓存系统
+func NewCache(defaultExpiration, gcInterval time.Duration) *Cache {
+  c := &Cache {
+    defaultExpiration: defaultExpiration,
+    gcInterval: gcInterval,
+    items: map[string]Item{},
+    stopGc: make(chan bool),
+  }
+  //启动过期清理方法
+  go c.gcLoop()
+  return c
+}
 
